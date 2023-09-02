@@ -1,0 +1,232 @@
+---
+title: "Football Player Analysis"
+author: "ADITYA BHARATH"
+date: "7/1/2022"
+output: html_document
+---
+
+# Importing Dataset
+Collected and compiled from online repository: StatBomb (https://fbref.com/en/comps/Big5/defense/players/Big-5-European-Leagues-Stats)
+
+Midfielder position descriptions: https://betbonanza.com/blog/6-kinds-of-midfielders-changing-the-face-of-the-game
+
+```{r}
+library(readxl)
+setwd("~/Downloads")
+totaldata <- read_xlsx("footballdata.xlsx")
+head(totaldata)
+```
+
+# Selecting subset for midfielder data
+
+```{r}
+levels(as.factor(totaldata$Pos))
+mfdata <- totaldata[grep("MF",totaldata$Pos),]
+mfdata <- mfdata[,-2]
+head(mfdata)
+```
+
+# Cleaning Data
+
+```{r}
+sum(is.na(mfdata))
+mfdata <- na.omit(mfdata)
+```
+
+## Exploratory Data Analysis
+
+```{R}
+summary(mfdata)
+```
+
+# Correlation Plotting
+
+```{r}
+library(funModeling) 
+library(tidyverse) 
+library(Hmisc)
+plot_num(mfdata)
+```
+#Scaling the data
+```{r}
+for(i in 2:ncol(mfdata)){
+  mfdata[,i] <- scale(mfdata[,i])
+}
+```
+
+Names are irrelevant, so we will be dropping the column. 
+```{r}
+mfdata <- mfdata[,-1]
+```
+
+# Classification Into Midfielder Classes
+
+Most modern midfielders are classified into one of these 6, we are gonna try to build a new classification system by checking the ideal number of classes and the defining attributes per cluster. 
+
+1. Anchor
+2. Depp lying playmaker
+3. Regista
+4. Box to box
+5. Number 8's
+6. Number 10's
+
+### K Means Clustering for K=6
+
+```{r}
+set.seed(10)
+km.out=kmeans(mfdata,centers=6,nstart=20)
+library(factoextra)
+fviz_cluster(km.out,data=mfdata)
+```
+
+
+In the above method, we have alloted the midfielders ourselves into 6 pre-defined, and most commonly accepted midfield classes. However, As we can see above, there are certain points which are a cluster of their own. This is not idea. We will also look into the optimal number of classes to classify into. 
+
+```{r}
+k <- 1:15
+wss <- integer(0)
+for(i in k){
+  km <- kmeans(mfdata,i,nstart=20)
+  wss <- c(wss,km$tot.withinss)
+}
+plot(k,wss,type="b",col="red",cex=2,pch=20,main="Total Sum of Squares Within Clusters Per K Value")
+```
+Using the elbow method to determine the ideal number of 'k' clusters, we may see that 3 is the ideal number of centers. 
+
+Redoing the clustering approach with k=3. 
+
+```{r}
+km.out=kmeans(mfdata[,-1],centers=3,nstart=20)
+library(factoextra)
+fviz_cluster(km.out,data=mfdata[,-1])
+```
+In the above graph, dim1 and dim2 represent the 2 principal components of our dataset. 
+
+# Principal Component Analysis
+
+```{r}
+result <- prcomp(mfdata,scale=TRUE)
+result$rotation <- -1*result$rotation
+result$rotation
+biplot(result,cex=0.5)
+```
+
+```{r}
+barplot(km.out$centers,col=levels(as.factor(km.out$cluster)),legend=levels(as.factor(km.out$cluster)),ylim=c(-1,2),main="Cluster Traits Defined by Centers",beside=TRUE)
+```
+
+Analysis of each cluster:
+
+
+
+```{r}
+km.out$center
+```
+
+# Adding Classes of midfielder to the data
+
+```{r}
+mfdata$class <- km.out$cluster
+mfdata$class
+barplot(table(mfdata$class),col=1:3,xlab="Type of midfielder",ylab="Count",main="Number of midfielders per type")
+```
+
+
+## Building a classification model to group midfielders
+
+# Train Test Split
+
+```{r}
+data.train <- mfdata[sample(nrow(mfdata),nrow(mfdata)/2),]
+data.test <- mfdata[sample(nrow(mfdata),nrow(mfdata)/2),]
+```
+
+QDA and LDA might be very difficult to perform since the variables are all so correlated. 
+
+# K Nearest Neighbours
+
+```{r}
+library(class)
+train.X <- data.matrix(data.train[,-ncol(data.train)])
+test.X <-  data.matrix(data.test[,-ncol(data.train)])
+train.class <- data.train$class
+test.class <- data.test$class
+set.seed(10)
+
+# KNN (k=1)
+knn.pred <-  knn(train.X, test.X, train.class, k = 3)
+mean(knn.pred != data.test$class)
+
+# KNN (k=10)
+knn.pred <-  knn(train.X, test.X, train.class, k = 10)
+mean(knn.pred != test.class)
+
+# KNN (k=100)
+knn.pred <-  knn(train.X, test.X, train.class, k = 100)
+mean(knn.pred != test.class)
+```
+
+Thus, ideal KNN model is where k=100. Model error = 4.6%. 
+
+# Random Forest
+
+```{r}
+library(randomForest)
+set.seed(1)
+bag.data=randomForest(class~.,data=data.train,mtry=33,importance=TRUE)
+bag.data
+yhat.bag = predict(bag.data,newdata=data.test)
+mean((round(yhat.bag)!=data.test$class))
+varImpPlot(bag.data,col=1:34)
+```
+Very low error percentage 4.38%
+
+# Boosted Random Forest
+
+```{r}
+library(gbm)
+set.seed(1)
+boost.data=gbm(class~.,data=data.train,distribution="gaussian",n.trees=5000,interaction.depth=4)
+summary(boost.data)
+yhat.boost=predict(boost.data,newdata=data.test,n.trees=5000)
+mean((round(yhat.boost)!=data.test$class)^2)
+```
+3.9% error percentage. Better than bagged random forest. 
+
+```{r}
+library(caret)
+confusionMatrix(data=as.factor(round(yhat.boost)),as.factor(data.test$class))
+```
+
+Best model: boosted random forest. 
+
+# What Makes A Winning Midfield?
+
+Collected data from the past 4 UCL winners. 
+We will aggregate predictions from our 3 models since the error difference between them was so low. We will then take the majority of each classification as our final class
+
+```{r}
+ucldata <- read_xlsx("ucldata.xlsx",skip=1)
+head(ucldata)
+class1 <- round(predict(boost.data,ucldata))
+class2 <- round(predict(bag.data,ucldata))
+names(class2) <- NULL
+class3 <- knn(train=train.X,test=data.matrix(ucldata[,-1]),train.class,k=100)
+class3 <- as.numeric(class3)
+output <- matrix(c(class1,class2,class3),ncol=3)
+output
+```
+
+Thus, judging by the output matrix, we can designate the following classes to each instance of the UCL midfield dataset (based on majority voting from 3 models):
+3,2,2,2,2,3,2,2,3,2,2,3
+
+```{r}
+ucldata$class <- c(3,2,2,2,2,3,2,2,3,2,2,3)
+head(ucldata[,c(1,35)],12)
+```
+Real Madrid: Type Two = 2, Type 3=1
+Chelsea: Type Two = 2, Type 3=1
+Bayern Munich: Type Two = 2, Type 3=1
+Liverpool: Type Two = 2, Type 3=1
+
+Thus, all midfields have the common pattern of having two midfielders of class 2 and one midfielder of class 3. 
